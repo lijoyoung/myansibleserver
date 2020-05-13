@@ -1,0 +1,15 @@
+- name: Terminate instances
+  hosts: localhost
+  vars:
+    region: ap-south-1
+  vars_files:
+    - /etc/ansible/group_vars/terminate.yml
+  tasks:
+    - name: Terminate instances that were previously launched
+      ec2:
+        state: 'absent'
+        region: "{{ region }}"
+        instance_ids: 
+          - "{{ t_windows }}"
+          - "{{ t_linux_node }}"
+

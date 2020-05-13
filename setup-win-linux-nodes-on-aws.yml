@@ -1,0 +1,114 @@
+- name: Launch a new AL2 ec2 instance
+  hosts: localhost
+  gather_facts: False
+  vars:
+    # All defaults set for Mumbai region - ap-south-1
+    keypair: lijoKeyMumbai
+    instance_type: t2.micro
+    win_instance_type: t2.medium
+    security_group: reena-sg
+    linux_image: ami-0470e33cd681b2476
+    win_image: ami-0d0b566c7d15a03a3
+    region: ap-south-1
+    subnet_id: subnet-06e9df61dae7e55ec
+  tasks:
+    - name: Launch linux (AL2) instance
+      ec2:
+        key_name: "{{ keypair }}"
+        group: "{{ security_group }}"
+        instance_type: "{{ instance_type }}"
+        image: "{{ linux_image }}"
+        wait: true
+        region: "{{ region }}"
+        vpc_subnet_id: "{{ subnet_id }}"
+        assign_public_ip: yes
+        count: 1
+        instance_tags:
+          Name: linux_node
+        user_data: |
+          #!/bin/bash -xe
+
+          echo Installing nano, git
+          yum install nano -y
+
+          echo adding the public key to authorized_keys
+          echo 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC064FyLl5Exz1th/ZNZy10Dnqw3c4dcndAnKxNNkc6Rea3A6OS/SDOGqlXlU7kD7OCg6y9reRqqw/pSlmGp+mrTtq8v12fUS5AWIog9MHNYSeKvJ6h+v75pwh1Q6rSZYuEkp3t/Sm5Uwok9f7mNDpSMD7euQCFG2+fcmWJCNginDdPfAnuEsT77O5jTWqJxs232ECeddPYfaW9sKpG8mkRzw8aO2isqNISBydC0TzuL2DFw0ZOsGrQXQ4krU91gl3l+XAdh9ShZuydpb/JL/YoWud4ASdTfX+3BLu7c0bfou5wwefUsMaO5chIOi3LS0UxH145hXL65CiWbCPBPNmz root@localhost.localdomain' >> /root/.ssh/authorized_keys
+
+          echo Setup sshd for ansible connection
+          sed -i '/PermitRootLogin/d' /etc/ssh/sshd_config
+          sed -i -e '$a\PermitRootLogin without-password' /etc/ssh/sshd_config
+          service sshd restart
+
+          echo linux_node ready for ansible
+      register: linux_node
+
+    - debug: var=linux_node
+
+    - name: Add linux ip to hosts file
+      blockinfile:
+        path: /etc/ansible/hosts
+        marker: "# {mark} ANSIBLE MANAGED BLOCK Linux"
+        block: |
+          [linux_node]
+          {{ linux_node.instances[0].public_ip }}
+      delegate_to: localhost
+
+    - name: Add linux instance id to terminate list
+      lineinfile:
+        path: /etc/ansible/group_vars/terminate.yml
+        regexp: '^t_linux_node:'
+        line: "t_linux_node: {{ linux_node.instances[0].id }}"
+
+
+    - name: Launch windows server 2019 instance
+      ec2:
+        key_name: "{{ keypair }}"
+        group: "{{ security_group }}"
+        instance_type: "{{ win_instance_type }}"
+        image: "{{ win_image }}"
+        wait: true
+        region: "{{ region }}"
+        vpc_subnet_id: "{{ subnet_id }}"
+        assign_public_ip: yes
+        count: 1
+        instance_tags:
+          Name: windows_node
+        user_data:          
+          <powershell> 
+          Invoke-Expression ((New-Object System.Net.Webclient).DownloadString('https://raw.githubusercontent.com/ansible/ansible/devel/examples/scripts/ConfigureRemotingForAnsible.ps1'))
+          </powershell>
+      register: windows_node
+
+    - debug: var=windows_node
+
+    - name: Add windows ip to hosts file
+      blockinfile:
+        path: /etc/ansible/hosts
+        marker: "# {mark} ANSIBLE MANAGED BLOCK Windows"
+        block: |
+          [windows]
+          {{ windows_node.instances[0].public_ip }}
+      delegate_to: localhost
+
+    - name: Get the windows Administrator password
+      ec2_win_password:
+        instance_id: "{{ windows_node.instances[0].id }}"
+        region: "{{ region }}"
+        key_file: "/root/.ssh/lijoKeyMumbai.pem"
+        wait: yes
+      register: windows_password
+
+    - debug: var=windows_password
+
+    - name: update password in windows.yml
+      lineinfile:
+        path: /etc/ansible/group_vars/windows.yml
+        regexp: '^ansible_password:'
+        line: "ansible_password: {{ windows_password.win_password }}"
+
+    - name: Add windows instance id to terminate list
+      lineinfile:
+        path: /etc/ansible/group_vars/terminate.yml
+        regexp: '^t_windows:'
+        line: "t_windows: {{ windows_node.instances[0].id }}"
+
